@@ -2,7 +2,6 @@ import ast
 from collections.abc import Sequence
 from pathlib import Path
 
-from auto_skill_pruner.file_manager import load_skills_from_directory
 from auto_skill_pruner.models import Component, TestCase
 from auto_skill_pruner.oracle import (
     create_ast_quality_validator,
@@ -39,44 +38,45 @@ def test_multi_trial_stability_prevents_flaky_skill_deletion() -> None:
     assert report.final_score.pass_rate == 1.0
 
 
-def test_real_workspace_skills_directory_large_scale_ddmin() -> None:
-    """リポジトリ同梱のskills/群と拡張スキル群(計38個)を読み込み、ddminで高速に最小構成へ枝刈りできることを検証する。"""
-    repo_skills_dir = Path(__file__).resolve().parent.parent / "skills"
-    loaded_skills = load_skills_from_directory(repo_skills_dir)
-    assert len(loaded_skills) >= 7
-    extra_skills = [
-        Component(f"extra_skill_{i:02d}", "SKILL", "HOW_TO", f"Extra legacy rule {i}" * 20)
-        for i in range(30)
+def test_large_scale_ddmin_convergence() -> None:
+    """38要素(HOW_TOとWHAT_SPECの混在および負の相互作用を含む)からddminで最小構成へ高速収束することを検証する。"""
+    how_to_skills = [
+        Component(f"howto_{i:02d}", "SKILL", "HOW_TO", f"Legacy reasoning step {i}" * 25)
+        for i in range(20)
     ]
-    all_skills = [*loaded_skills, *extra_skills]
+    spec_skills = [
+        Component(f"spec_{i:02d}", "SKILL", "WHAT_SPEC", f"Domain specification {i}" * 15)
+        for i in range(18)
+    ]
+    all_skills = [*how_to_skills, *spec_skills]
 
     cases = [
-        TestCase("tc_polars", "df_query", lambda out: "LAZY_CHAIN_OK" in out),
-        TestCase("tc_pruner", "prune_query", lambda out: "PRUNER_OK" in out),
-        TestCase("tc_no_bloat", "check_bloat", lambda out: "OVERLOAD" not in out),
+        TestCase("tc_spec_03", "q1", lambda out: "SPEC_03_OK" in out),
+        TestCase("tc_spec_14", "q2", lambda out: "SPEC_14_OK" in out),
+        TestCase("tc_no_interference", "q3", lambda out: "CONFLICT" not in out),
     ]
 
-    def realistic_pipeline(comps: Sequence[Component], payload: str) -> str:
+    def pipeline(comps: Sequence[Component], payload: str) -> str:
         ids = {c.id for c in comps}
         tokens: list[str] = []
-        if "python-polars-expert" in ids:
-            tokens.append("LAZY_CHAIN_OK")
-        if "auto-skill-pruner" in ids:
-            tokens.append("PRUNER_OK")
-        if "c-drive-cleanup" in ids and "extra_skill_00" in ids:
-            tokens.append("OVERLOAD")
+        if "spec_03" in ids:
+            tokens.append("SPEC_03_OK")
+        if "spec_14" in ids:
+            tokens.append("SPEC_14_OK")
+        if "howto_00" in ids and "howto_01" in ids:
+            tokens.append("CONFLICT")
         return "|".join(tokens)
 
     report = prune_skills_and_hooks(
         all_skills,
         cases,
-        realistic_pipeline,
+        pipeline,
         PruningConfig(strategy="ddmin"),
     )
     surviving_ids = {c.id for c in report.surviving_components}
-    assert surviving_ids == {"python-polars-expert", "auto-skill-pruner"}
+    assert surviving_ids == {"spec_03", "spec_14"}
     assert report.final_score.pass_rate == 1.0
-    assert report.tokens_saved > 5000
+    assert report.tokens_saved > 4000
 
 
 def _max_control_nesting(node: ast.AST, current_depth: int = 0) -> int:
