@@ -22,16 +22,13 @@ PruningUnit = tuple[Component, ...]
 
 @dataclass(frozen=True)
 class PruningConfig:
-    """枝刈りアルゴリズムの戦略・閾値・HOOK監視設定を保持する。"""
+    """枝刈りアルゴリズムの戦略・閾値・試行回数・HOOK監視設定を保持する。"""
 
     strategy: PruningStrategy = "auto"
     ddmin_threshold: int = 8
+    trials_per_case: int = 1
     hook_monitor: HookTelemetryMonitor | None = None
     min_hook_observations: int = 1000
-    on_trial_callback: " TrialCallback | None" = None
-
-
-TrialCallback = object
 
 
 @dataclass(frozen=True)
@@ -59,6 +56,7 @@ class _PruningContext:
     test_cases: Sequence[TestCase]
     pipeline_runner: PipelineRunner
     baseline_score: EvaluationScore
+    trials_per_case: int = 1
     cache: dict[frozenset[str], EvaluationScore] = field(default_factory=dict)
     evaluation_calls: int = 0
 
@@ -71,6 +69,7 @@ class _PruningContext:
                 components,
                 self.test_cases,
                 self.pipeline_runner,
+                self.trials_per_case,
             )
         return self.cache[key]
 
@@ -95,6 +94,21 @@ class _PruningContext:
         )
         self.state.step_logs.append(log_entry)
 
+    def accept_reduction(
+        self,
+        phase: str,
+        dropped_comps: Sequence[Component],
+        trial_comps: list[Component],
+        trial_score: EvaluationScore,
+    ) -> bool:
+        """削除確定時のログ記録・アクティブ要素更新・ベースライン上方修正を一括実行し、スコア向上有無を返す。"""
+        self.record_step(phase, dropped_comps, trial_score, "PRUNED")
+        self.state.active_components = trial_comps
+        improved = trial_score.pass_rate > self.baseline_score.pass_rate + 1e-9
+        if improved:
+            self.baseline_score = trial_score
+        return improved
+
 
 def _group_into_units(components: Sequence[Component]) -> list[PruningUnit]:
     """共依存するSKILLとHOOK(同一group_id)が別々に抜かれて偽陰性になるのを防ぐためバンドル化する。"""
@@ -103,7 +117,8 @@ def _group_into_units(components: Sequence[Component]) -> list[PruningUnit]:
     for comp in components:
         if comp.group_id is None:
             units.append((comp,))
-        elif comp.group_id not in seen_groups:
+            continue
+        if comp.group_id not in seen_groups:
             seen_groups.add(comp.group_id)
             bundle = tuple(c for c in components if c.group_id == comp.group_id)
             units.append(bundle)
@@ -146,10 +161,7 @@ def _try_ddmin_complement_step(
         trial_score = ctx.evaluate(trial_comps)
 
         if trial_score.is_acceptable_against(ctx.baseline_score):
-            ctx.record_step("ddmin", dropped_comps, trial_score, "PRUNED")
-            ctx.state.active_components = trial_comps
-            if trial_score.pass_rate > ctx.baseline_score.pass_rate:
-                ctx.baseline_score = trial_score
+            ctx.accept_reduction("ddmin", dropped_comps, trial_comps, trial_score)
             return complement_units
 
         ctx.record_step("ddmin", dropped_comps, trial_score, "KEPT")
@@ -187,14 +199,11 @@ def _run_linear_loop(ctx: _PruningContext) -> None:
         trial_comps = _flatten_units([u for u in units if _unit_key(u) != target_key])
         trial_score = ctx.evaluate(trial_comps)
 
-        if trial_score.is_acceptable_against(ctx.baseline_score):
-            ctx.record_step("linear", target_unit, trial_score, "PRUNED")
-            ctx.state.active_components = trial_comps
-            if trial_score.pass_rate > ctx.baseline_score.pass_rate + 1e-9:
-                ctx.baseline_score = trial_score
-                tested_keys.clear()
-        else:
+        if not trial_score.is_acceptable_against(ctx.baseline_score):
             ctx.record_step("linear", target_unit, trial_score, "KEPT")
+            continue
+        if ctx.accept_reduction("linear", target_unit, trial_comps, trial_score):
+            tested_keys.clear()
 
 
 def _apply_dead_hook_prepruning(
@@ -267,6 +276,7 @@ def prune_skills_and_hooks(
         test_cases=test_cases,
         pipeline_runner=pipeline_runner,
         baseline_score=EvaluationScore(0.0, 0, len(test_cases), state.total_tokens),
+        trials_per_case=cfg.trials_per_case,
     )
     _apply_dead_hook_prepruning(state, cfg, 0.0)
     shortcut_report = _try_empty_shortcut(ctx, initial_components)

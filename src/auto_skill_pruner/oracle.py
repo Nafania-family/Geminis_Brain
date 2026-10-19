@@ -48,7 +48,8 @@ def _is_function_compliant(
     max_args: int,
 ) -> bool:
     """生成コード内の個別関数が行数上限・引数上限・型ヒント100%を満たすかASTで機械検証するため。"""
-    args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+    raw_args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+    args = [a for i, a in enumerate(raw_args) if not (i == 0 and a.arg in ("self", "cls"))]
     if len(args) > max_args or node.returns is None:
         return False
     if any(arg.annotation is None for arg in args):
@@ -86,22 +87,37 @@ def compose_validators(validators: Sequence[ValidatorFn]) -> ValidatorFn:
     return _validate
 
 
+def _run_case_trials(
+    active_components: Sequence[Component],
+    case: TestCase,
+    pipeline_runner: PipelineRunner,
+    trials_per_case: int,
+) -> bool:
+    """推論の確率的揺らぎによるまぐれ通過を排除するため、指定回数すべてで合格した場合のみTrueとする。"""
+    for _ in range(max(1, trials_per_case)):
+        output = pipeline_runner(active_components, case.input_payload)
+        if not case.deterministic_validator(output):
+            return False
+    return True
+
+
 def evaluate_system(
     active_components: Sequence[Component],
     test_cases: Sequence[TestCase],
     pipeline_runner: PipelineRunner,
+    trials_per_case: int = 1,
 ) -> EvaluationScore:
-    """指定されたSKILL/HOOK群のみで推論を実行し、外部検証器の通過率とトークン数を算出するため。"""
+    """指定されたSKILL/HOOK群のみで推論を実行し、外部検証器の通過ケース集合と通過率を算出するため。"""
     active_tokens = sum(c.token_estimate for c in active_components)
     if not test_cases:
-        return EvaluationScore(1.0, 0, 0, active_tokens)
+        return EvaluationScore(1.0, 0, 0, active_tokens, frozenset())
 
-    passed = 0
+    passed_ids: set[str] = set()
     for case in test_cases:
-        output = pipeline_runner(active_components, case.input_payload)
-        if case.deterministic_validator(output):
-            passed += 1
+        if _run_case_trials(active_components, case, pipeline_runner, trials_per_case):
+            passed_ids.add(case.id)
 
+    passed = len(passed_ids)
     pass_rate = passed / len(test_cases)
     logger.debug(
         "Evaluated %d components: pass_rate=%.4f (%d/%d), tokens=%d",
@@ -111,4 +127,4 @@ def evaluate_system(
         len(test_cases),
         active_tokens,
     )
-    return EvaluationScore(pass_rate, passed, len(test_cases), active_tokens)
+    return EvaluationScore(pass_rate, passed, len(test_cases), active_tokens, frozenset(passed_ids))

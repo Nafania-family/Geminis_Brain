@@ -93,7 +93,8 @@ def test_evaluate_system_calculates_exact_pass_rate_and_tokens() -> None:
     assert score_with.pass_rate == 1.0
     assert score_without.pass_rate == 0.5
     assert score_with.active_tokens > score_without.active_tokens
-    assert EvaluationScore(1.0, 2, 2, 10).is_acceptable_against(score_with) is True
+    better = EvaluationScore(1.0, 2, 2, 10, frozenset({"tc1", "tc2"}))
+    assert better.is_acceptable_against(score_with) is True
     assert score_without.is_acceptable_against(score_with) is False
 
 

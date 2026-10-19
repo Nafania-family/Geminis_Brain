@@ -42,16 +42,24 @@ class TestCase:
 
 @dataclass(frozen=True)
 class EvaluationScore:
-    """テスト通過率と有効トークン数を保持し、枝刈り採否の決定論的比較を提供する。"""
+    """テスト通過率と通過ケース集合を保持し、退行を許さないパレート優越比較を提供する。
+
+    なぜpassed_case_idsの包含関係(issubset)を検査するか:
+    チャンク単位でSKILLを抜いた際、「邪魔なSKILLが消えてテストAが通るようになったが、
+    同時に必須SKILLも消えてテストBが落ち、平均点が偶然同じになる」という相殺退行を防ぐため。
+    """
 
     pass_rate: float
     passed_count: int
     total_count: int
     active_tokens: int
+    passed_case_ids: frozenset[str] = field(default_factory=frozenset)
 
     def is_acceptable_against(self, baseline: "EvaluationScore") -> bool:
-        """ベースライン以上の精度を維持しているかを浮動小数点誤差を許容して判定する。"""
-        return self.pass_rate + 1e-9 >= baseline.pass_rate
+        """ベースラインで通過していた全テストケースを維持しつつ、通過率が同等以上かを判定する。"""
+        rate_ok = self.pass_rate + 1e-9 >= baseline.pass_rate
+        no_regression = baseline.passed_case_ids.issubset(self.passed_case_ids)
+        return rate_ok and no_regression
 
 
 @dataclass(frozen=True)
