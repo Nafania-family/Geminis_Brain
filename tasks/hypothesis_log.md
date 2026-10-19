@@ -49,10 +49,25 @@
 - **対象レイヤー**: 🟠 レイヤー3 (システム全体の安定性保証とドッグフーディング検証)
 - **IF (変更内容)**:
   1. `oracle.py` および `pruner.py` の `PruningConfig` に `trials_per_case: int = 1` を追加し、同一テストケースを `trials_per_case` 回評価して全回通過した場合のみ合格とする All-Pass（最悪ケース）決定論的オラクルを実装する。
-  2. `tests/test_layer4_stability_and_dogfood.py` を新規作成し、(a) 確率的に失敗する不安定な試行を確実に棄却して必須SKILLを守るテスト、(b) `/home/nafania/.gemini/config/skills` の実スキル群を読み込んだ大規模 `ddmin` 枝刈り検証、(c) `src/auto_skill_pruner/` の全PythonファイルをAST解析して30行・4引数・ネスト2階層・型ヒント100%・`print`ゼロを検証する自己品質テストを実装する。
+  2. `tests/test_layer4_stability_and_dogfood.py` を新規作成し、(a) 確率的に失敗する不安定な試行を確実に棄却して必須SKILLを守るテスト、(b) `skills/` の実スキル群を読み込んだ大規模 `ddmin` 枝刈り検証、(c) `src/auto_skill_pruner/` の全PythonファイルをAST解析して30行・4引数・ネスト2階層・型ヒント100%・`print`ゼロを検証する自己品質テストを実装する。
 - **THEN (期待される変化・結果)**:
   不安定な推論結果による誤削除が100%防止され、実スキル群に対する高速枝刈りと全ソースコードの静的品質ゲートがすべてPASSする。
 
 - **検証結果 (PASS)**:
-  - 初回テスト実行時、38個の実環境スキルに対する `ddmin` チャンク分割において「有害SKILL削除によるテスト改善(+1)と必須SKILL削除によるテスト退行(-1)が同一チャンク内で相殺され、平均スコアが `2/3 -> 2/3` で維持されたと誤認して必須SKILLを道連れ削除する」現象、および `analytics.py` (31行)・`cli.py` (40行) の行数超過、メソッドの `self` 引数検査不備、ネスト深さ3 (`if/elif`) を検出した。
+  - 初回テスト実行時、38個のスキルに対する `ddmin` チャンク分割において「有害SKILL削除によるテスト改善(+1)と必須SKILL削除によるテスト退行(-1)が同一チャンク内で相殺され、平均スコアが `2/3 -> 2/3` で維持されたと誤認して必須SKILLを道連れ削除する」現象、および `analytics.py` (31行)・`cli.py` (40行) の行数超過、メソッドの `self` 引数検査不備、ネスト深さ3 (`if/elif`) を検出した。
   - `EvaluationScore.is_acceptable_against` に `baseline.passed_case_ids.issubset(self.passed_case_ids)`（パレート非退行条件）を導入し、全関数の行数・ネストをリファクタリングした結果、全15件の単体・統合・E2E・ドッグフーディングテストが100% PASS した。
+
+---
+
+## 仮説5 (🟠 レイヤー3: Geminis_Brain リポジトリへの統合パッケージングと上書き更新整備)
+- **目的/現状の課題**:
+  旧来の静的な設定集であった `Geminis_Brain` リポジトリを、決定論的オラクルによる自動枝刈りエンジン（`auto_skill_pruner`）と獲得・淘汰の非対称ループ（`skills/`, `knowledge/`）を統合した「自己新陳代謝するエージェント脳フレームワーク」として再構築・上書き整備する。
+- **対象レイヤー**: 🟠 レイヤー3 (リポジトリ構造の統合・セキュリティ監査・Gitリモート同期)
+- **IF (変更内容)**:
+  1. `skills/` に再帰的自己最適化のコアとなるカスタムスキル群（`auto-skill-pruner`, `hypothesis-driven-editor`, `python-polars-expert`, `quality-guard`, `self-evolution`, `task-tdd-expert`, `ux-designer`, `c-drive-cleanup`）を配置し、ハードコードされた個人環境パス等をサニタイズする。
+  2. `knowledge/` に普遍的なドメイン知識ベース（`ipa`, `math`, `stats`, `python3`, `practices`, `ux-psychology`, `ds-expert`, `ds-advanced`, `e-cert`）を配置する。
+  3. ルートの `README.md` および `GEMINI.md` を更新し、シードスキル群に対する自動枝刈りシミュレーションと監査レポート出力が一コマンドで動作するように統合する。
+- **THEN (期待される変化・結果)**:
+  機密情報・個人パスの混入がゼロであり、全単体・統合・ドッグフーディングテストが PASS し、`Geminis_Brain` リポジトリへクリーンに push 可能な状態となる。
+- **検証結果 (PASS)**:
+  - `quality-guard/SKILL.md` および `ux-designer/SKILL.md` に残存していた旧Windows個人パスを相対パスへサニタイズし、全テキストファイルに個人パスが含まれないことを `grep` で検証完了。全15テスト・`mypy --strict`・`ruff check` がすべて PASS した。

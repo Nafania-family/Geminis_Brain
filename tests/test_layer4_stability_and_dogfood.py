@@ -40,14 +40,19 @@ def test_multi_trial_stability_prevents_flaky_skill_deletion() -> None:
 
 
 def test_real_workspace_skills_directory_large_scale_ddmin() -> None:
-    """実環境の ~/.gemini/config/skills (38スキル)を読み込み、ddminで高速に最小構成へ枝刈りできることを検証する。"""
-    real_skills_dir = Path("/home/nafania/.gemini/config/skills")
-    loaded_skills = load_skills_from_directory(real_skills_dir)
-    assert len(loaded_skills) >= 20
+    """リポジトリ同梱のskills/群と拡張スキル群(計38個)を読み込み、ddminで高速に最小構成へ枝刈りできることを検証する。"""
+    repo_skills_dir = Path(__file__).resolve().parent.parent / "skills"
+    loaded_skills = load_skills_from_directory(repo_skills_dir)
+    assert len(loaded_skills) >= 7
+    extra_skills = [
+        Component(f"extra_skill_{i:02d}", "SKILL", "HOW_TO", f"Extra legacy rule {i}" * 20)
+        for i in range(30)
+    ]
+    all_skills = [*loaded_skills, *extra_skills]
 
     cases = [
         TestCase("tc_polars", "df_query", lambda out: "LAZY_CHAIN_OK" in out),
-        TestCase("tc_bq", "sql_query", lambda out: "BQ_OPTIMIZED" in out),
+        TestCase("tc_pruner", "prune_query", lambda out: "PRUNER_OK" in out),
         TestCase("tc_no_bloat", "check_bloat", lambda out: "OVERLOAD" not in out),
     ]
 
@@ -56,22 +61,22 @@ def test_real_workspace_skills_directory_large_scale_ddmin() -> None:
         tokens: list[str] = []
         if "python-polars-expert" in ids:
             tokens.append("LAZY_CHAIN_OK")
-        if "bigquery-sql" in ids:
-            tokens.append("BQ_OPTIMIZED")
-        if "c-drive-cleanup" in ids and "data-autocleaning" in ids:
+        if "auto-skill-pruner" in ids:
+            tokens.append("PRUNER_OK")
+        if "c-drive-cleanup" in ids and "extra_skill_00" in ids:
             tokens.append("OVERLOAD")
         return "|".join(tokens)
 
     report = prune_skills_and_hooks(
-        loaded_skills,
+        all_skills,
         cases,
         realistic_pipeline,
         PruningConfig(strategy="ddmin"),
     )
     surviving_ids = {c.id for c in report.surviving_components}
-    assert surviving_ids == {"python-polars-expert", "bigquery-sql"}
+    assert surviving_ids == {"python-polars-expert", "auto-skill-pruner"}
     assert report.final_score.pass_rate == 1.0
-    assert report.tokens_saved > 10000
+    assert report.tokens_saved > 5000
 
 
 def _max_control_nesting(node: ast.AST, current_depth: int = 0) -> int:
